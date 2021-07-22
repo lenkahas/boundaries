@@ -6,65 +6,124 @@ output:
     toc_float: true
 ---
 
-
 ```{r setup, include=TRUE, results= 'hide', message=FALSE}
 library(igraph)
 library(knitr)
-library(corrplot)
-library(corrgram)
+# library(corrplot)
+# library(corrgram)
 library(rgdal)
 library(tidyverse)
-library(spdplyr)
-library(geojsonio)
+#library(spdplyr)
+# library(geojsonio)
 library(stplanr)
 library(ggplot2)
 #library(leaflet)
-library(SpatialPosition)
+#library(SpatialPosition)
 library(stargazer)
+library(rprojroot)
+library(cleangeo)
+library(tmap)
+
+# This is the project path
+path <- find_rstudio_root_file()
 ```
 
-## Commuting data and networks
+## Commuting flows
 
+```{r}
+path.data <- paste0(path, "/data/wf02ew_oa_v1.csv" )
 
-```{r load, include=TRUE, results= 'hide', message=FALSE}
-commuting <- read_csv("C:/Users/nw19521/Downloads/wf02ew_oa_v1.csv", 
+commuting <- read_csv(path.data, 
                       col_names = F) %>% 
   rename(o = X1,
          d = X2,
          weight = X3) %>%              # commuting flows
-  filter(substr(d, 1, 1) == "E" |      # Keep England and Wales, 
-           substr(d, 1, 1) == "W") %>% # drop Scotland, NI, and 
+  filter(substr(d, 1, 1) == "E" |      # Keep England, 
+           substr(o, 1, 1) == "E") %>% # drop Wales, Scotland, NI, and 
                                        # non-geographical OD codes 
                                        # OD0000001 = Mainly work at or from home
                                        # OD0000002 = Offshore installation
                                        # OD0000003 = No fixed place
                                        # OD0000004 = Outside UK
   glimpse()
-
 ```
-?? 
 
-```{r}
+The below is with to exclude the intra-OA flows. 
+**NOT TO RUN FOR NOW*
+
+```{r eval=FALSE}
 commuting.intra <- commuting %>%
   dplyr::filter(`Area of usual residence` == `Area of workplace`)
-commuting <- commuting %>%
-  dplyr::filter(`Area of usual residence` != `Area of workplace`)
+#commuting <- commuting %>%
+#  dplyr::filter(`Area of usual residence` != `Area of workplace`)
 ```
 
+Given the size of the network I am using the `fast and greedy` community detection algorithm. 
+The optimal number of communities is $11$.
+The problem is that when I try to force $communities$ = $constituencies$ the communities after the $11th$ have only $1$ $OA$.
+Therefore, I present the optimal solution here.
 
-```{r}
+
+```{r communities}
 net <-graph_from_data_frame(commuting, directed = TRUE, vertices = NULL)
 
-net.l <- net %>% 
-  as.undirected() %>% 
-  cluster_louvain()
+# I need to look on the sensitivity of the below
+# net.un <- as.undirected(net,
+#                         mode=c("mutual"),
+#                         edge.attr.comb = igraph_opt("edge.attr.comb"))
 
-net.fg <- net %>% 
-  as.undirected() %>% # needs work
-  fastgreedy.community()
+net.un <- as.undirected(net,
+                        mode="collapse",
+                        edge.attr.comb = igraph_opt("edge.attr.comb"))
+
+# fast and greedy
+fg <- net.un %>% 
+  fastgreedy.community() 
+
+V(net.un)$group <- membership(fg) # assign membership to vertices
+
+sizes(fg)
+
+# fg$membership <- cut_at(fg, 543) 
+# sizes(fg)
+# for cut_at 543, the first 11 communities have > 1
+
+names <- vertex_attr(net.un)[1]
+
+df <- cbind(as.data.frame(names),
+            fg$membership) %>% 
+  rename('community' = 'fg$membership')
+
+path.out <- paste0(path, "/outputs/fg.csv")
+write_csv(df, path.out)
+```
+
+Other community detection attempts.
+
+**Not to run**
+
+```{r eval=FALSE}
+# not hierarchical, I can't define cut_at
+# l <- net.un %>% 
+#   cluster_louvain() %>% 
+#   cut_at(no = 543)
+
+
+
+# Use spinglass to create a set number of communities
+sg <- net %>% 
+  cluster_spinglass(spins = 543) # 543 = the  number of constituencies allocated
+                                 # to England for the 2023 Review
+
+# Use hierarchical methods and cut_at to create a set number of communities 
+walk <- net %>% 
+  cluster_walktrap() %>% cut_at(no = 543) 
+
+eb <- net %>% cluster_edge_betweenness() %>% cut_at(no = 10)
+
 
 membership(net.l)
-length(net.l)
+length(fg)
 modularity(net.l)
 print(net.l)
 sizes(net.l)
@@ -74,542 +133,50 @@ plot_dendrogram(net.l)
 
 plot(lc, g)
 
-
 ```
 
+## Mapping the communities
 
-```{r communities, include=TRUE, results= 'markup', message=FALSE}
+```{r mapping, include=TRUE, results= 'markup', message=FALSE}
 
-net.all.und <- as.undirected(net.all, 
-                             mode=c("mutual"),
-                             edge.attr.comb = igraph_opt("edge.attr.comb"))
-communities.net.all <- cluster_fast_greedy(net.all.und)
+# OA from https://geoportal.statistics.gov.uk/datasets/ons::output-areas-december-2011-boundaries-ew-bgc-1/about
 
-# This provides a summary of the community algorithm:
-print(communities.net.all)
+path.oa <- paste0(path, "/data/Output_Areas__December_2011__Boundaries_EW_BGC.geojson")
 
-# To see how many communities we have, run the below:
-length(communities.net.all)
+oa <- readOGR(path.oa)
 
-# And these are the community sizes:
-sizes(communities.net.all)
-
-# Now, let's create a new object with the community membership
-#communities.net.all_membership <- membership(communities.net.all)
-
-# And convert it to a data.frame
-
-communities.net.all_membership <- membership(communities.net.all) %>%
-  unclass %>%                      # we first need to unclass the object
-  as.data.frame %>%                # we convert it to a dataframe
-  rename(community = ".") %>%      # rename the community column
-  rownames_to_column("cmlad11cd")  # we 'move' the rownames to a 
-                                   # new column in order to do a merge below
-
-# And now we can merge it with the LA names
-communities.net.all_membership <- merge(la.names, 
-                                        communities.net.all_membership,
-                                        by = "cmlad11cd",
-                                        all.y = T)
-
-# With a little bit of data wrangling we have a brand new community data frame
-communities.net.all_membership <- communities.net.all_membership %>% 
-  dplyr::arrange(community)
+head(oa@data)
 
 # Let's try to map our output. We need the local authorities shape file we have 
 # already loaded
 
-head(la)
-la$geo_labelw <- NULL
-la <- la[,c(2,1)]
-la$objectid <- NULL
-
 # Before we do any further analysis we make sure to convert the la object to WGS84 
 # Longitude / Latitude Coordinate System.
 wgs84 = '+proj=longlat +datum=WGS84'
-la <- spTransform(la, CRS(wgs84) )
+oa <- spTransform(oa, CRS(wgs84) )
 
 # This is the @data element of the la spatial object
-head(la@data)
+head(oa@data)
+
+# read data in case the community detection is not run
+df <- read_csv(path.out)
 
 # Let's merge it with the communities data frame
-la@data <- merge(la@data, communities.net.all_membership)
-la@data$community <- as.factor(la@data$community)
+oa@data <- merge(oa@data, df, by.x = "OA11CD", by.y = "name", all.x = T)
+sum(is.na(oa@data$community))
+oa@data$community <- as.factor(oa@data$community)
 
-# We fortify
-#la.f <- fortify(la, region = "cmlad11cd")
-# we use the tidy function from broom package as fortify has been depreciated.
-la.f <- broom::tidy(la, region = "cmlad11cd")
+# clean ploygons
+oa <- clgeo_Clean(oa)
 
-# And merge again
-la.f <- merge(la.f, la@data, by.x = "id", by.y = "cmlad11cd")
+path.map <- paste0(path, "/outputs/fg_commuting.png")
 
-# And this is our map
-ggplot(la.f, aes(long, lat, group = group, fill = community)) + geom_polygon(colour = "black") +
-  coord_equal() +
-  ggtitle("Communities using the 'fast and greedy' algorithm")
+fg.commuting <- tm_shape(oa) + 
+  tm_fill("community", 
+          title= "Community (fast and greedy)") + 
+  tm_layout("Commuting flows 2011")
+
+tmap_save(fg.commuting, path.map)
+
 ```
 
-```{block, type='alert alert-warning'}
-**Question**: What do you think about the output? Can we learn anything? Can you try different community algorithms?
-Check [igraph's manual](https://igraph.org/r/doc/)  and [Javed et al (2018)](https://www.sciencedirect.com/science/article/pii/S1084804518300560)
-```
-
-## Network Visualisation
-
-The below chunks of code offer some intro to plotting network data.
-Have a look to see how the code works.
-
-```{r vis, include=TRUE, results= 'markup', message=FALSE}
-plot(net.all, # the graph to be plotted
-     layout=layout.fruchterman.reingold, # the layout method. see the igraph documentation for details
-     main='My first graph in R', # specifies the title
-     vertex.label.dist=0.5, # puts the name labels slightly off the dots
-     vertex.frame.color='blue', # the colour of the border of the dots
-     vertex.label.color='black', # the colour of the name labels
-     vertex.label.font=2, # the font of the name labels
-     vertex.label=V(net.all)$id, # specifies the labels of the vertices. in this case the 'name' attribute is used
-     vertex.label.cex=.5,	# specifies the size of the font of the labels. can also be made to vary
-     edge.arrow.size=0.1) # specifies the arrow size  
-```
-
-Not a very nice outcome :(
-Let's remove some information
-
-```{r vis2, include=TRUE, results= 'markup', message=FALSE}
-plot(net.all, # the graph to be plotted
-     layout=layout.fruchterman.reingold, # the layout method. see the igraph documentation for details
-     main='My second graph in R',	# specifies the title
-     vertex.frame.color='blue', # the colour of the border of the dots
-     vertex.label.font=2,	# the font of the name labels
-     vertex.label=NA,	# no labels for the vertices
-     edge.arrow.size=0, # specifies the arrow size
-     vertex.size=5) # vertex size
-```
-
-Let's try to only plot nodes with high weighted degree centrality.
-
-```{r vis3, include=TRUE, results= 'markup', message=FALSE}
-
-# The below gives us the 90th percentile:
-q <- quantile(strength(net.all), .9)
-
-# Then, we create a network with the nodes we DON'T want to plot. In this case the lowest 90%
-low_nodes <- V(net.all)[strength(net.all) < q] # 108659 is the 90% percentile. Feel free to play with different numbers
-
-# And this is the network with the 10% of the most central nodes
-net.all.central <- delete.vertices(net.all, low_nodes)
-
-# The below uses the node degree centrality to plot the node size. 
-# Pay attention to the 0.0001 factor.
-
-plot(net.all.central, # the graph to be plotted
-     layout=layout.fruchterman.reingold, # the layout method. see the igraph documentation for details
-     main='My third graph in R', # specifies the title
-     vertex.frame.color='blue', # the colour of the border of the dots
-     vertex.label.font=2,	# the font of the name labels
-     vertex.label=V(net.all.central)$id, # no labels for the vertices
-     vertex.label.font=1, # the font type of the name labels (1 plain, 2 bold, 3, italic, 4 bold italic, 5 symbol)
-     vertex.label.cex=.5,	# specifies the size of the font of the labels. can also be made to vary
-     edge.arrow.size=0, # specifies the arrow size
-     vertex.size=strength(net.all.central)*0.0001) # defines the node size based on weighted degree centrality
-```
-
-Not very nice either...
-
-```{block, type='alert alert-warning'}
-
-For the next time: 
-
-1. spend some time browsing the `igraph`'s manual, 
-
-2. search for code online to `plot large netwoks in R using igraph`, and 
-
-3. use the following tutorials
-  
-  - [netVizR](http://mr.schochastics.net/netVizR.html) 
-(the data can be found [here](http://mr.schochastics.net/#projects) under the 
-'Network Visualization in R' section 
-
-  - [edge-bundling](http://blog.schochastics.net/post/non-hierarchical-edge-bundling-in-r/) 
-
-in order to produce more meaningful network visualisations of the UK commuting
-network.
-
-I am interesting in one or multiple plots with:
-
-- all or a subset of the nodes and edges.
-How could you select such a subset?
-
-- the communities you detected.
-
-- varying size of nodes based on a centrality measure. Again, you can 
-decide to plot a subset of the network based on some network characteristics.
-
-- an *appropriate* to the network layout. 
-```
-
-## Mapping
-Until now we focused mostly on the topology of the network and we ignored its spatial 
-dimension. However, this is an important attribute of the commuting network and 
-we should necessarily consider it and incorporate it in our analysis. To begin with
-we will map these commuting flows. Bare in mind that this is not a trivial process 
-as, in essence, we need to attach the geographical coordinates to the network nodes 
-and plot the network based on these coordinates. Given the size of our network this 
-might be computationally expensive. It is also challenging to create a meaningful 
-map given the size of the network.
-
-
-The local authorities spatial object is necessary in order to use the `od2line()` 
-function from the `stplanr` package. This is a very useful function transforms 
-origin to destination (OD) tables to linear spatial objects. In order for this function 
-to work we need the above spatial object with the zones of the origin and destination 
-flows. Importantly it needs to only include the zone codes (i.e. the local authority 
-codes), which should match with the origin and destination codes.This is the `la` 
-spatial object of the local authorities in England and Wales, which has already 
-been loaded in R.
-
-The below code just plots the boundaries of local authorities.
-
-```{r la2, include=TRUE, results= 'markup', message=FALSE}
-ggplot(la.f, aes(long, lat, group = group)) + geom_polygon(colour = "black", fill = "white") +
-  coord_equal() +
-  ggtitle("Local authorities")
-```
-
-Now let's do some clean-up of the `commuting.all` data frame in order to convert 
-it to a spatial object using the `od2line()` function.
-
-```{r lod2line, include=TRUE, results= 'markup', message=FALSE}
-# We start by plotting a histogram of the data. We are using ggplot() as the output 
-# is nicer, but the simpler hist() could also be used
-
-options(scipen=999) # It prevents R from using scientific notation for numbers
-ggplot(commuting.all, 
-       aes(x=weight)) + 
-  geom_histogram() +
-  geom_vline(aes(xintercept=mean(weight)), # This line of code adds a vertical line to represent the mean
-             color="blue", linetype="dashed", size=1)
-```
-
-As you can see the flow data is very skewed. So, let's truncate the data and plot 
-a histogram for flows between origin and destinations will less than 1000 people.
-
-```{r lod2line2, include=TRUE, results= 'markup', message=FALSE}
-ggplot(commuting.all[commuting.all$weight < 1000,], 
-       aes(x=weight)) + 
-  geom_histogram() +
-  geom_vline(aes(xintercept=mean(weight)),
-             color="blue", 
-             linetype="dashed", 
-             size=1)
-```
-
-There is a very large number of local authority pairs with very few people commuting 
-between these OD pairs. So, in order to decrease the data and the mapping complexity 
-we will keep only the OD pairs with more than 5 commuters.
-
-```{r lod2line3, include=TRUE, results= 'markup', message=FALSE}
-
-# This is the number of rows we currently have:
-dim(commuting.all)
-
-commuting.all.truncated <- commuting.all[commuting.all$weight > 5,]
-
-# And this is how mane we have after we filter the data frame.
-dim(commuting.all.truncated)
-
-# This line of code converts the origin-destination table to a spatial object using 
-# the corresponding zones spatial object (la) that we have already loaded.
-travel_network <- od2line(flow = commuting.all.truncated, zones = la)   
-
-# As before, we transform the new spatial object to WGS84.
-travel_network <- spTransform(travel_network, CRS(wgs84))
-
-# Just to see the class of the new spatial object
-class(travel_network)
-
-plot(travel_network)
-```
-
-This is a naive plot of the spatial network. We can guess the shape of England and 
-Wales, but this is like a *hairball* network and far from being useful. In order 
-to produce a more useful visualisation we will employ the `leaflet` 
-[package](https://rstudio.github.io/leaflet/), which produces interactive maps 
-using `JaveScript` Libraries.
-
-```{r leaflet, include=TRUE, results= 'markup', message=FALSE}
-Flow_pal <- colorQuantile("YlOrBr", domain = travel_network$weight, n=5)
-
-leaflet() %>%
-  addTiles() %>%
-  addPolylines(
-    data = travel_network,
-    weight = .1,
-    color = ~Flow_pal(weight),
-    opacity = .6) %>%
-    addLegend("topright",
-              pal = Flow_pal,
-              values = travel_network$weight,
-              title = "Commuting flows in 2011")
-```
-
-Let's try now to create an interactive map showing only the flows originating from 
-Bristol and Birmingham.
-
-```{r leaflet2, include=TRUE, results= 'markup', message=FALSE}
-
-# To begin with let's find out the local authority codes for Bristol and Birmingham
-la.names[grep("Bristol", la.names$cmlad11nm),]
-la.names[grep("Birmingham", la.names$cmlad11nm),]
-
-# These are E41000023 and E41000281 respectively.
-
-# Next we will create the 'groups' of local authorities
-travel_network$la.groups = "Rest"
-travel_network$la.groups[travel_network$o == "E41000023"] = "Bristol"
-travel_network$la.groups[travel_network$o == "E41000281"] = "Birmingham"
-
-leaflet() %>%
-  addTiles() %>%
-  addPolylines(
-    data = travel_network,
-    weight = 1, # Notice the different value for better visual effect when zoom in
-    color = ~Flow_pal(weight),
-    opacity = .8, # as above
-    group = travel_network$la.groups) %>%
-  addLayersControl(
-    position = "bottomleft",
-    overlayGroups = unique(travel_network$la.groups),
-    options = layersControlOptions(
-      collapsed = FALSE)) %>%
-  addLegend("topright",
-          pal = Flow_pal,
-          values = travel_network$weight,
-          title = "Commuting flows in 2011")
-```
-
-## Spatial modelling
-
-Let's now move to model these flows. If you remember the basic Gravity model is 
-defined as following:
-
-$$T_{ij} = k \displaystyle \frac{V_i^\lambda M_j^\alpha}{D_{ij}^\beta}$$
-
-And if we take the logarithms of both sides of the equation we can transform the 
-Gravity model to something which looks like a linear model:
-
-$$lnT_{ij} = lnk + \lambda lnV_i + \alpha lnM_j - \beta lnD_{ij}$$
-
-The above transformed equation can be estimated as a linear model if we assume that 
-$y = lnT_{ij}$, $c = lnk$, $x_1 = lnV_i$, $a_1 = \lambda$ etc. Hence, we can use 
-OLS to estimate the following:
-
-$$lnT_{ij} = lnk + \lambda lnV_i + \alpha lnM_j - \beta lnD_{ij} + e_{ij}$$
-
-This is what is known as the log-linear transformation.
-
-There are a number of issues with such an approach though. Most importantly, our 
-dependent variable is not continuous, but instead a discrete, positive variable 
-(there are no flows of -324.56 people!). Therefore we need to employ an appropriate 
-estimator and this is what the Poisson regression does. Briefly, if we exponentiate 
-both sides, the above equation can be written as:
-
-$$T_{ij} = e^{lnk + \lambda lnV_i + \alpha lnM_j - \beta lnD_{ij}}$$
-The above is in the form of the Poisson regression. So, we are interested in modelling 
-*not* the mean $T_{ij}$ drawn from a normally distributed $T$, but, instead, the 
-mean $T_{ij}$, which is the average of the all the flows (i.e. counts) between any 
-$i$ and $j$. For more details about the Poisson regression have a look at the 
-(Legler and Roback 2019)[https://bookdown.org/roback/bookdown-bysh/ch-poissonreg.html#initial-models].
-In total, we will estimate the commuting flows using both OLS and Poisson regressions.
-
-But before we get into the estimation we need to build a data frame, which includes 
-all the necessary variables. These are the origin-destination flows $T$ between 
-$i$ and $j$, the distance $dist$ between $i$ and $j$ and the characteristics $V$ 
-and $M$ of origin $i$ and destinations $j$ that we believe *push* and *pull* individuals 
-to commute.  
-
-```{r si data, include=TRUE, results= 'markup', message=FALSE, warning = FALSE}
-
-# we use the `SpatialPosition` package and the `CreateDistMatrix()` function to 
-# calculate a distance matrix for all local authorities,
-la.d <- CreateDistMatrix(la, la, longlat = T)
-
-# we use as column and row name the local authority codes
-rownames(la.d) <- la$cmlad11cd
-colnames(la.d) <- la$cmlad11cd
-
-# This is a matrix of the distances between *all* local authorities. We then use 
-# the function as.data.frame.table() to convert this matrix to a data frame each 
-# line of which represents an origin-destination pair.
-la.d <- as.data.frame.table(la.d, responseName = "value")
-
-# Please note that the elements of the diagonal are present in this distance matrix.
-```
-
-If you want to check that the distances we are correct, use google maps to calculate 
-the distance between E41000001 (Middlesbrough) and E41000002 (Hartlepool).
-Remember that the la.d is expressed in meters.
-
-What is missing here? Do you remember the intra-zone commuting flows?
-E.g. the commuters that live and work in Bristol? We had removed these from the 
-network analysis and visualisation element. Because we don't have information about 
-the distances of the intra-zone commutes, we will exclude them from this analysis.
-
-```{r si data2, include=TRUE, results= 'markup', message=FALSE, warning = FALSE}
-la.d <- la.d %>% 
-  filter(Var1 != Var2)
-
-# Now let's see how the distance object looks like
-head(la.d)
-```
-
-What we want to do is to match the data frame with all the distances with the 
-commuting flows data frame. To do that we will (1) create a new code for the 
-origin-destination pair and (2) match the two data frames.
-
-```{r si data3, include=TRUE, results= 'markup', message=FALSE, warning = FALSE}
-
-la.d$ij.code <- paste(la.d$Var1, la.d$Var2, sep = "_")
-commuting$ij.code <- paste(commuting$`Area of usual residence`, 
-                           commuting$`Area of workplace`, 
-                           sep = "_")
-
-# Now before we perform the match let's count how observations both data frames have in order to test if we loose any observation during the matching
-dim(la.d)
-dim(commuting)
-```
-
-As you can see the commuting data frame has less observations than the la.d one, 
-which includes all the possible origin-destination pairs. What does it mean?
-That for some origin-destination pairs there are no commuting flows, which of 
-course makes sense. We need to include these pairs with $flow = 0$ in our data though 
-because the lack of commuting flows **is not** missing data!  
-
-```{r si data4, include=TRUE, results= 'markup', message=FALSE, warning = FALSE}
-
-commuting.si <- merge(la.d, commuting, by = "ij.code", all.x = TRUE)
-dim(commuting.si)
-head(commuting.si)
-
-# Some variables are repetitive or need name change
-commuting.si$`Area of usual residence` <- NULL
-commuting.si$`Area of workplace` <- NULL
-names(commuting.si)[4] <- "distance"
-names(commuting.si)[2] <- "i"
-names(commuting.si)[3] <- "j"
-
-# Let's see if we have any missing values
-sapply(commuting.si, function(x) sum(is.na(x)))
-```
-
-There are quite a few. What does it mean? That there are no commuting flows for 
-these origin-destination pairs and,therefore, were excluded from the origin 
-commuting data set we downloaded. So, we are going to replace these $NAs$ with 
-$0s$.
-
-```{r si data5, include=TRUE, results= 'markup', message=FALSE, warning = FALSE}
-commuting.si <- commuting.si %>% replace(., is.na(.), 0)
-```
-
-Now let's bring data for some $i$ and $j$ characteristics that we believe that 
-affect commuting. I have prepared such a small data set from the census, which 
-includes resident population and working populations as *push* and *pull* variables.
-These data have been obtained by [nomis](https://www.nomisweb.co.uk/published/census/odexplorer.asp).
-
-```{r si ij data, include=TRUE, results= 'markup', message=FALSE, warning = FALSE}
-data.workplace <- read.csv("https://www.dropbox.com/s/0ym88p8quwaiyau/data_workplace.csv?dl=1")
-
-# Dropbox trick: to use in an .Rmd the link that Dropbox provides to share a file 
-# replace dl=0 with dl=1 at the end of the link
-
-data.resident <- read.csv("https://www.dropbox.com/s/09d7v5cm6ov3ioz/data_resident.csv?dl=1")
-
-commuting.si <- merge(commuting.si, data.resident, by.x = "i",
-                       by.y = "Merging.Local.Authority.Code",
-                       all.x = TRUE)
-
-commuting.si <- merge(commuting.si, data.workplace, by.x = "j",
-                       by.y = "Merging.Local.Authority.Code",
-                       all.x = TRUE)
-```
-
-```{block, type='alert alert-warning'}
-**Question** are there any redundant columns? Can you remove them?
-```
-
-Before we start modelling these flows, let's plot our variables.
-
-```{r si.plots, include=TRUE, results= 'asis', message=FALSE, warning = FALSE}
-ggplot(commuting.si, aes(x=distance, 
-                         y=`All categories: Method of travel to work`)) +
-  geom_point() +
-  geom_smooth(method=lm)
-
-ggplot(commuting.si, aes(x=resident, 
-                         y=`All categories: Method of travel to work`)) +
-  geom_point() +
-  geom_smooth(method=lm)
-
-ggplot(commuting.si, aes(x=workplace, 
-                         y=`All categories: Method of travel to work`)) +
-  geom_point() +
-  geom_smooth(method=lm)
-```
-
-```{block, type='alert alert-warning'}
-**Question** What do you take from these graphs?
-```
-
-Let's try now to model these flows. We will start with a simple OLS to estimate 
-the above specifications. Please pay attention to the small trick we did. Because 
-there are non-materialised origin-destination pairs (i.e. with 0 flows), we added 
-a small value ($0.5$) in the dependent variable. Otherwise we will receive an 
-error as the logarithm of $0$ is not defined.
-
-```{r si_ols, include=TRUE, results= 'markup', message=FALSE, warning = FALSE}
-
-ols.model <- lm(log(`All categories: Method of travel to work`+.5) ~ 
-                  log(distance) + log(resident) + log(workplace), 
-                data = commuting.si)
-
-# To see the model output you can use the summary() function.
-summary(ols.model)
-```
-
-So, the OLS regression estimated the four parameters:
-
-- $lnk = 7.971$
-- $\beta = -1.840$
-- $\lambda = 0.514$
-- $\alpha = -0.852$
-
-Let's estimate now our model using a Poisson regression. Given that we don't take 
-the logarithm of the dependent variable, there is no need to add $0.5$.
-
-```{r si_poisson, include=TRUE, results= 'markup', message=FALSE, warning = FALSE}
-
-glm.model <- glm((`All categories: Method of travel to work`)~ 
-                   log(distance) + log(resident) + log(workplace),  
-                 family = poisson(link = "log"), data = commuting.si)
-summary(glm.model)
-```
-
-The following parameter1 have been estimated
-
-- $lnk = 11.635$
-- $\beta = -1.816$
-- $\lambda = 0.319$
-- $\alpha = 0.820$
-
-As you can see the differences are rather small.
-
-The `stargazer` package I use below creates elegant regression tables
-
-```{r stargazer, include=TRUE, results= 'asis', message=FALSE, warning = FALSE}
-stargazer(ols.model, glm.model, type = "text")
-```
-
-```{block, type='alert alert-warning'}
-**Question** Can you interpret the regression results?
-```
