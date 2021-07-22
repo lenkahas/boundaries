@@ -173,10 +173,9 @@ path.map <- paste0(path, "/outputs/fg_commuting.png")
 
 fg.commuting <- tm_shape(oa) + 
   tm_fill("community", 
-          title= "Community (fast and greedy)") + 
+          title= "Communities (fast and greedy)") + 
   tm_layout("Commuting flows 2011")
 
 tmap_save(fg.commuting, path.map)
-
 ```
 
