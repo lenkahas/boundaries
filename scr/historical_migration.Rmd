@@ -31,7 +31,7 @@ library(tmap)
 path <- find_rstudio_root_file()
 ```
 
-## MIgration flows
+## Migration flows
 
 ```{r}
 path.data <- paste0(path, "/data/LEFT_HOME_1911_XY.txt" )

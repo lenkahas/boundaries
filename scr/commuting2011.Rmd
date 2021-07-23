@@ -41,14 +41,18 @@ commuting <- read_csv(path.data,
   rename(o = X1,
          d = X2,
          weight = X3) %>%              # commuting flows
-  filter(substr(d, 1, 1) == "E" |      # Keep England, 
-           substr(o, 1, 1) == "E") %>% # drop Wales, Scotland, NI, and 
+  filter(startsWith(o, "E"),           # Keep England,
+         startsWith(d, "E")) %>%       # drop Wales, Scotland, NI, and
                                        # non-geographical OD codes 
                                        # OD0000001 = Mainly work at or from home
                                        # OD0000002 = Offshore installation
                                        # OD0000003 = No fixed place
                                        # OD0000004 = Outside UK
   glimpse()
+
+# check it only includes England
+# unique(substr(commuting$o, 1, 1))
+# unique(substr(commuting$d, 1, 1))
 ```
 
 The below is with to exclude the intra-OA flows. 
@@ -62,8 +66,8 @@ commuting.intra <- commuting %>%
 ```
 
 Given the size of the network I am using the `fast and greedy` community detection algorithm. 
-The optimal number of communities is $11$.
-The problem is that when I try to force $communities$ = $constituencies$ the communities after the $11th$ have only $1$ $OA$.
+The optimal number of communities is $10$.
+The problem is that when I try to force $communities$ = $constituencies$ the communities after the $10th$ have only $1$ $OA$.
 Therefore, I present the optimal solution here.
 
 
@@ -150,9 +154,6 @@ oa <- readOGR(path.oa)
 
 head(oa@data)
 
-# Let's try to map our output. We need the local authorities shape file we have 
-# already loaded
-
 # Before we do any further analysis we make sure to convert the la object to WGS84 
 # Longitude / Latitude Coordinate System.
 wgs84 = '+proj=longlat +datum=WGS84'
@@ -169,7 +170,7 @@ oa@data <- merge(oa@data, df, by.x = "OA11CD", by.y = "name", all.x = T)
 sum(is.na(oa@data$community))
 oa@data$community <- as.factor(oa@data$community)
 
-# clean ploygons
+# clean polygons
 oa <- clgeo_Clean(oa)
 
 path.map <- paste0(path, "/outputs/fg_commuting.png")
