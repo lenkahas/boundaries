@@ -1,5 +1,5 @@
 ---
-title: "Commuting between OA, 2011"
+title: "Historical migration"
 output:
   html_document:
     toc: true
@@ -31,74 +31,78 @@ library(tmap)
 path <- find_rstudio_root_file()
 ```
 
-## Commuting flows
+## MIgration flows
 
 ```{r}
-path.data <- paste0(path, "/data/wf02ew_oa_v1.csv" )
+path.data <- paste0(path, "/data/LEFT_HOME_1911_XY.txt" )
 
-commuting <- read_csv(path.data, 
-                      col_names = F) %>% 
-  rename(o = X1,
-         d = X2,
-         weight = X3) %>%              # commuting flows
-  filter(substr(d, 1, 1) == "E" |      # Keep England, 
-           substr(o, 1, 1) == "E") %>% # drop Wales, Scotland, NI, and 
-                                       # non-geographical OD codes 
-                                       # OD0000001 = Mainly work at or from home
-                                       # OD0000002 = Offshore installation
-                                       # OD0000003 = No fixed place
-                                       # OD0000004 = Outside UK
-  glimpse()
+migration <- read_csv(path.data, col_names = T) %>% 
+  mutate(o = paste0(BP_X, "_", BP_Y ),    # unique origins coded as X_Y
+         d = paste0(RES_X, "_", RES_Y),   # unique destinations coded as X_Y
+         od = paste0(o, "-", d)) %>%      # unique od pairs coded as X_Y-X_Y (o_o_d_d)
+  group_by(od) %>%          
+  summarise(weight = n()) %>%             # flows for each od pair 
+  #migration %>% 
+  separate(od, c("o","d"), sep = "-") %>% # recreate unique o and d
+  glimpse()                               # 12099 unique d and 
+                                          # 21913 unique o
+# length(unique(migration$o))
+
+test <- migration %>% 
+  filter(o == d)
 ```
 
 The below is with to exclude the intra-OA flows. 
 **NOT TO RUN FOR NOW*
 
 ```{r eval=FALSE}
-commuting.intra <- commuting %>%
-  dplyr::filter(`Area of usual residence` == `Area of workplace`)
-#commuting <- commuting %>%
-#  dplyr::filter(`Area of usual residence` != `Area of workplace`)
+
+migration.intra <- migration %>% 
+  filter(o == d)                   # 6849 / 3104633
+
+# migration <- migration %>% 
+#   filter(o != d)
 ```
 
 Given the size of the network I am using the `fast and greedy` community detection algorithm. 
-The optimal number of communities is $11$.
+The optimal number of communities is $14$.
+
 The problem is that when I try to force $communities$ = $constituencies$ the communities after the $11th$ have only $1$ $OA$.
 Therefore, I present the optimal solution here.
 
 
 ```{r communities}
-net <-graph_from_data_frame(commuting, directed = TRUE, vertices = NULL)
+net.migration <-graph_from_data_frame(migration, directed = TRUE, vertices = NULL)
 
 # I need to look on the sensitivity of the below
 # net.un <- as.undirected(net,
 #                         mode=c("mutual"),
 #                         edge.attr.comb = igraph_opt("edge.attr.comb"))
 
-net.un <- as.undirected(net,
+net.migration.un <- as.undirected(net.migration,
                         mode="collapse",
                         edge.attr.comb = igraph_opt("edge.attr.comb"))
 
 # fast and greedy
-fg <- net.un %>% 
+fg.migration <- net.migration.un %>% 
   fastgreedy.community() 
 
-V(net.un)$group <- membership(fg) # assign membership to vertices
+V(net.migration.un)$group <- membership(fg.migration) # assign membership to vertices
 
-sizes(fg)
+sizes(fg.migration)
 
 # fg$membership <- cut_at(fg, 543) 
 # sizes(fg)
 # for cut_at 543, the first 11 communities have > 1
 
-names <- vertex_attr(net.un)[1]
+names.migration <- vertex_attr(net.migration.un)[1]
 
-df <- cbind(as.data.frame(names),
-            fg$membership) %>% 
-  rename('community' = 'fg$membership')
+df.migration <- cbind(as.data.frame(names.migration),
+            fg.migration$membership) %>% 
+  rename('community' = 'fg.migration$membership')
 
-path.out <- paste0(path, "/outputs/fg.csv")
-write_csv(df, path.out)
+path.out <- paste0(path, "/outputs/fg_migration.csv")
+write_csv(df.migration, path.out)
 ```
 
 Other community detection attempts.
