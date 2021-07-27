@@ -34,22 +34,21 @@ path <- find_rstudio_root_file()
 ## Migration flows
 
 ```{r}
-path.data <- paste0(path, "/data/LEFT_HOME_1911_XY.txt" )
+path.data <- paste0(path, "/data/OD_Matrix_1911.txt" )
 
 migration <- read_csv(path.data, col_names = T) %>% 
   mutate(o = paste0(BP_X, "_", BP_Y ),    # unique origins coded as X_Y
          d = paste0(RES_X, "_", RES_Y),   # unique destinations coded as X_Y
          od = paste0(o, "-", d)) %>%      # unique od pairs coded as X_Y-X_Y (o_o_d_d)
+  rename(weight = POP_COUNT) %>% 
   group_by(od) %>%          
   summarise(weight = n()) %>%             # flows for each od pair 
-  #migration %>% 
   separate(od, c("o","d"), sep = "-") %>% # recreate unique o and d
   glimpse()                               # 12099 unique d and 
-                                          # 21913 unique o
-# length(unique(migration$o))
-
-test <- migration %>% 
-  filter(o == d)
+  
+  
+                                          # 20211 unique o, 11063 unique d
+# length(unique(migration$d))
 ```
 
 The below is with to exclude the intra-OA flows. 
@@ -58,16 +57,16 @@ The below is with to exclude the intra-OA flows.
 ```{r eval=FALSE}
 
 migration.intra <- migration %>% 
-  filter(o == d)                   # 6849 / 3104633
+  filter(o == d)                   # 6197 / 2,811,190 intra flows
 
 # migration <- migration %>% 
 #   filter(o != d)
 ```
 
 Given the size of the network I am using the `fast and greedy` community detection algorithm. 
-The optimal number of communities is $14$.
+The optimal number of communities is $6$.
 
-The problem is that when I try to force $communities$ = $constituencies$ the communities after the $11th$ have only $1$ $OA$.
+The problem is that when I try to force $communities$ = $constituencies$ the communities after the $6th$ have only $1$ $OA$.
 Therefore, I present the optimal solution here.
 
 
@@ -82,6 +81,8 @@ net.migration <-graph_from_data_frame(migration, directed = TRUE, vertices = NUL
 net.migration.un <- as.undirected(net.migration,
                         mode="collapse",
                         edge.attr.comb = igraph_opt("edge.attr.comb"))
+
+
 
 # fast and greedy
 fg.migration <- net.migration.un %>% 
