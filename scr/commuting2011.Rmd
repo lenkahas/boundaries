@@ -1,0 +1,185 @@
+---
+title: "Commuting between OA, 2011"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+knit: (function(inputFile, encoding) {
+    rmarkdown::render(inputFile, encoding = encoding, output_dir = "../outputs/")
+  })
+---
+
+```{r setup, include=TRUE, results= 'hide', message=FALSE}
+library(igraph)
+library(knitr)
+# library(corrplot)
+# library(corrgram)
+library(rgdal)
+library(tidyverse)
+#library(spdplyr)
+# library(geojsonio)
+library(stplanr)
+library(ggplot2)
+#library(leaflet)
+#library(SpatialPosition)
+library(stargazer)
+library(rprojroot)
+library(cleangeo)
+library(tmap)
+
+# This is the project path
+path <- find_rstudio_root_file()
+```
+
+## Commuting flows
+
+```{r}
+path.data <- paste0(path, "/data/wf02ew_oa_v1.csv" )
+
+commuting <- read_csv(path.data, 
+                      col_names = F) %>% 
+  rename(o = X1,
+         d = X2,
+         weight = X3) %>%              # commuting flows
+  filter(startsWith(o, "E"),           # Keep England,
+         startsWith(d, "E")) %>%       # drop Wales, Scotland, NI, and
+                                       # non-geographical OD codes 
+                                       # OD0000001 = Mainly work at or from home
+                                       # OD0000002 = Offshore installation
+                                       # OD0000003 = No fixed place
+                                       # OD0000004 = Outside UK
+  glimpse()
+
+# check it only includes England
+# unique(substr(commuting$o, 1, 1))
+# unique(substr(commuting$d, 1, 1))
+```
+
+The below is with to exclude the intra-OA flows. 
+**NOT TO RUN FOR NOW*
+
+```{r eval=FALSE}
+commuting.intra <- commuting %>%
+  dplyr::filter(`Area of usual residence` == `Area of workplace`)
+#commuting <- commuting %>%
+#  dplyr::filter(`Area of usual residence` != `Area of workplace`)
+```
+
+Given the size of the network I am using the `fast and greedy` community detection algorithm. 
+The optimal number of communities is $10$.
+The problem is that when I try to force $communities$ = $constituencies$ the communities after the $10th$ have only $1$ $OA$.
+Therefore, I present the optimal solution here.
+
+
+```{r communities}
+net <-graph_from_data_frame(commuting, directed = TRUE, vertices = NULL)
+
+# I need to look on the sensitivity of the below
+# net.un <- as.undirected(net,
+#                         mode=c("mutual"),
+#                         edge.attr.comb = igraph_opt("edge.attr.comb"))
+
+net.un <- as.undirected(net,
+                        mode="collapse",
+                        edge.attr.comb = igraph_opt("edge.attr.comb"))
+
+# fast and greedy
+fg <- net.un %>% 
+  fastgreedy.community() 
+
+V(net.un)$group <- membership(fg) # assign membership to vertices
+
+sizes(fg)
+
+# fg$membership <- cut_at(fg, 543) 
+# sizes(fg)
+# for cut_at 543, the first 11 communities have > 1
+
+names <- vertex_attr(net.un)[1]
+
+df <- cbind(as.data.frame(names),
+            fg$membership) %>% 
+  rename('community' = 'fg$membership')
+
+path.out <- paste0(path, "/outputs/fg.csv")
+write_csv(df, path.out)
+```
+
+Other community detection attempts.
+
+**Not to run**
+
+```{r eval=FALSE}
+# not hierarchical, I can't define cut_at
+# l <- net.un %>% 
+#   cluster_louvain() %>% 
+#   cut_at(no = 543)
+
+
+
+# Use spinglass to create a set number of communities
+sg <- net %>% 
+  cluster_spinglass(spins = 543) # 543 = the  number of constituencies allocated
+                                 # to England for the 2023 Review
+
+# Use hierarchical methods and cut_at to create a set number of communities 
+walk <- net %>% 
+  cluster_walktrap() %>% cut_at(no = 543) 
+
+eb <- net %>% cluster_edge_betweenness() %>% cut_at(no = 10)
+
+
+membership(net.l)
+length(fg)
+modularity(net.l)
+print(net.l)
+sizes(net.l)
+is_hierarchical(net.l)
+
+plot_dendrogram(net.l)
+
+plot(lc, g)
+
+```
+
+## Mapping the communities
+
+```{r mapping, include=TRUE, results= 'asis', message=FALSE}
+
+# OA from https://geoportal.statistics.gov.uk/datasets/ons::output-areas-december-2011-boundaries-ew-bgc-1/about
+
+path.oa <- paste0(path, "/data/Output_Areas__December_2011__Boundaries_EW_BGC.geojson")
+
+oa <- readOGR(path.oa)
+
+head(oa@data)
+
+# Before we do any further analysis we make sure to convert the la object to WGS84 
+# Longitude / Latitude Coordinate System.
+wgs84 = '+proj=longlat +datum=WGS84'
+oa <- spTransform(oa, CRS(wgs84) )
+
+# This is the @data element of the la spatial object
+head(oa@data)
+
+# read data in case the community detection is not run
+df <- read_csv(path.out)
+
+# Let's merge it with the communities data frame
+oa@data <- merge(oa@data, df, by.x = "OA11CD", by.y = "name", all.x = T)
+sum(is.na(oa@data$community))
+oa@data$community <- as.factor(oa@data$community)
+
+# clean polygons
+oa <- clgeo_Clean(oa)
+
+path.map <- paste0(path, "/outputs/fg_commuting.png")
+
+fg.commuting <- tm_shape(oa) + 
+  tm_fill("community", 
+          title= "Communities (fast and greedy)") + 
+  tm_layout("Commuting flows 2011")
+
+tmap_save(fg.commuting, path.map)
+```
+
