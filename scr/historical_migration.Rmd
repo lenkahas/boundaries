@@ -150,13 +150,11 @@ plot(lc, g)
 
 ```{r mapping, include=TRUE, results= 'asis', message=FALSE}
 
-# OA from https://geoportal.statistics.gov.uk/datasets/ons::output-areas-december-2011-boundaries-ew-bgc-1/about
+path.poly <- paste0(path, "/data/OD_MATRIX_1911")
 
-path.oa <- paste0(path, "/data/Output_Areas__December_2011__Boundaries_EW_BGC.geojson")
+poly <- readOGR(path.poly, layer = 'RSD1911_conpar_par1851_SHAPEONLY_ENGLAND')
 
-oa <- readOGR(path.oa)
-
-head(oa@data)
+head(poly@data)
 
 # Let's try to map our output. We need the local authorities shape file we have 
 # already loaded
@@ -164,29 +162,108 @@ head(oa@data)
 # Before we do any further analysis we make sure to convert the la object to WGS84 
 # Longitude / Latitude Coordinate System.
 wgs84 = '+proj=longlat +datum=WGS84'
-oa <- spTransform(oa, CRS(wgs84) )
+poly <- spTransform(poly, CRS(wgs84) )
 
 # This is the @data element of the la spatial object
-head(oa@data)
+head(poly@data)
 
 # read data in case the community detection is not run
-df <- read_csv(path.out)
+#df.migration <- read_csv(path.out)
 
 # Let's merge it with the communities data frame
-oa@data <- merge(oa@data, df, by.x = "OA11CD", by.y = "name", all.x = T)
-sum(is.na(oa@data$community))
-oa@data$community <- as.factor(oa@data$community)
+poly@data <- merge(poly@data, df.migration, by.x = "SHAPEID", by.y = "name", all.x = T)
+sum(is.na(poly@data$community))
+poly@data$community <- as.factor(poly@data$community)
 
 # clean ploygons
-oa <- clgeo_Clean(oa)
+poly <- clgeo_Clean(poly)
 
-path.map <- paste0(path, "/outputs/fg_commuting.png")
+path.map.migration <- paste0(path, "/outputs/fg_migration.png")
 
-fg.commuting <- tm_shape(oa) + 
+fg.migration <- tm_shape(poly) + 
   tm_fill("community", 
           title= "Communities (fast and greedy)") + 
-  tm_layout("Commuting flows 2011")
+  tm_layout("Migration flows 1911")
 
-tmap_save(fg.commuting, path.map)
+tmap_save(fg.migration, path.map.migration)
 ```
 
+## West Midlands
+
+Community 5 is the West Midlands one.
+
+```{r}
+wm.migration <- induced_subgraph(net.migration.un, V(net.migration.un)$group==5)
+
+#test <- induced_subgraph(wm.migration, which_multiple(wm.migration))
+
+# The above creates multiple edges, no idea why.
+# So, I simplify the graph
+wm.migration <- igraph::simplify(wm.migration, 
+                          remove.multiple = TRUE, 
+                          remove.loops = TRUE,
+                          edge.attr.comb = igraph_opt("edge.attr.comb")
+                          )
+
+# fast and greedy
+fg.wm.migration <- wm.migration %>% 
+  fastgreedy.community() 
+
+V(wm.migration)$group <- membership(fg.wm.migration) # assign membership to vertices
+
+sizes(fg.wm.migration)
+
+# fg$membership <- cut_at(fg, 543) 
+# sizes(fg)
+# for cut_at 543, the first 11 communities have > 1
+
+names.wm.migration <- vertex_attr(wm.migration)[1]
+
+df.wm.migration <- cbind(as.data.frame(names.wm.migration),
+            fg.wm.migration$membership) %>% 
+  rename('community' = 'fg.wm.migration$membership')
+
+path.out.wm.migration <- paste0(path, "/outputs/fg_wm.migration.csv")
+write_csv(df.wm.migration, path.out.wm.migration)
+```
+
+## Map West Midlands communities
+
+```{r}
+path.poly <- paste0(path, "/data/OD_MATRIX_1911")
+
+poly <- readOGR(path.poly, layer = 'RSD1911_conpar_par1851_SHAPEONLY_ENGLAND')
+
+head(poly@data)
+
+# Before we do any further analysis we make sure to convert the la object to WGS84 
+# Longitude / Latitude Coordinate System.
+wgs84 = '+proj=longlat +datum=WGS84'
+poly <- spTransform(poly, CRS(wgs84) )
+
+
+# read data in case the community detection is not run
+#df <- read_csv(path.out.wm.migration)
+
+# Let's merge it with the communities data frame
+poly@data <- merge(poly@data, df.wm.migration, by.x = "SHAPEID", by.y = "name", all.x = T)
+sum(is.na(poly@data$community))
+poly@data$community <- as.factor(poly@data$community)
+
+# clean polygons
+poly <- clgeo_Clean(poly)
+
+path.map.wm.migration <- paste0(path, "/outputs/fg_wm_migration.png")
+
+fg.wm.migration <- tm_shape(poly) + 
+  tm_fill("community", 
+          title= "W. Midlands communities (fast and greedy)") + 
+  tm_layout("Migration flows 1911")
+
+tmap_save(fg.wm.migration, path.map.wm.migration)
+
+wm.migration.for.geojson <- poly[!is.na(poly@data$community),]
+
+path.out.wm.migration.geojson <- paste0(path, "/outputs/wm_migration_fg.geojson")
+writeOGR(wm.migration.for.geojson, path.out.wm.migration.geojson, layer="meuse", driver="GeoJSON")
+```

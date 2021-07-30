@@ -163,7 +163,7 @@ oa <- spTransform(oa, CRS(wgs84) )
 head(oa@data)
 
 # read data in case the community detection is not run
-df <- read_csv(path.out)
+#df <- read_csv(path.out)
 
 # Let's merge it with the communities data frame
 oa@data <- merge(oa@data, df, by.x = "OA11CD", by.y = "name", all.x = T)
@@ -182,4 +182,74 @@ fg.commuting <- tm_shape(oa) +
 
 tmap_save(fg.commuting, path.map)
 ```
+## West Midlands
 
+Community 3 is the West Midlands one.
+
+```{r}
+wm <- induced_subgraph(net.un, V(net.un)$group==3)
+
+# fast and greedy
+fg.wm <- wm %>% 
+  fastgreedy.community() 
+
+V(wm)$group <- membership(fg.wm) # assign membership to vertices
+
+sizes(fg.wm)
+
+# fg$membership <- cut_at(fg, 543) 
+# sizes(fg)
+# for cut_at 543, the first 11 communities have > 1
+
+names.wm <- vertex_attr(wm)[1]
+
+df.wm <- cbind(as.data.frame(names.wm),
+            fg.wm$membership) %>% 
+  rename('community' = 'fg.wm$membership')
+
+path.out.wm <- paste0(path, "/outputs/fg_wm.csv")
+write_csv(df.wm, path.out.wm)
+```
+
+## Map West Midlands communities
+
+```{r}
+path.oa <- paste0(path, "/data/Output_Areas__December_2011__Boundaries_EW_BGC.geojson")
+
+oa <- readOGR(path.oa)
+
+head(oa@data)
+
+# Before we do any further analysis we make sure to convert the la object to WGS84 
+# Longitude / Latitude Coordinate System.
+wgs84 = '+proj=longlat +datum=WGS84'
+oa <- spTransform(oa, CRS(wgs84) )
+
+# This is the @data element of the la spatial object
+head(oa@data)
+
+# read data in case the community detection is not run
+#df <- read_csv(path.out.wm)
+
+# Let's merge it with the communities data frame
+oa@data <- merge(oa@data, df.wm, by.x = "OA11CD", by.y = "name", all.x = T)
+sum(is.na(oa@data$community))
+oa@data$community <- as.factor(oa@data$community)
+
+# clean polygons
+oa <- clgeo_Clean(oa)
+
+path.map.wm <- paste0(path, "/outputs/fg_wm_commuting.png")
+
+fg.wm.commuting <- tm_shape(oa) + 
+  tm_fill("community", 
+          title= "W. Midlands communities (fast and greedy)") + 
+  tm_layout("Commuting flows 2011")
+
+tmap_save(fg.wm.commuting, path.map.wm)
+
+wm.for.geojson <- oa[!is.na(oa@data$community),]
+
+path.out.wm.geojson <- paste0(path, "/outputs/wm_fg.geojson")
+writeOGR(wm.for.geojson, path.out.wm.geojson, layer="wm.for.geojson", driver="GeoJSON")
+```
